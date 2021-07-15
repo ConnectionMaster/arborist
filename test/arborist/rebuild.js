@@ -1,25 +1,25 @@
 const t = require('tap')
 const _trashList = Symbol.for('trashList')
-const requireInject = require('require-inject')
-const Arborist = requireInject('../../lib/arborist/index.js')
+const Arborist = require('../../lib/arborist/index.js')
 const {resolve, dirname} = require('path')
 const fs = require('fs')
 const fixtures = resolve(__dirname, '../fixtures')
+const relpath = require('../../lib/relpath.js')
 
 const fixture = (t, p) => require(`${fixtures}/reify-cases/${p}`)(t)
 
 const isWindows = process.platform === 'win32'
 const PORT = 12345 + (+process.env.TAP_CHILD_ID || 0)
-t.test('setup explosive server', t => {
-  // nothing in this should ever hit the server
-  const server = require('http').createServer(() => {
-    throw new Error('rebuild should not hit the registry')
-  })
-  server.listen(PORT, () => {
-    t.parent.teardown(() => server.close())
-    t.end()
-  })
+
+const server = require('http').createServer(() => {
+  throw new Error('rebuild should not hit the registry')
 })
+t.before(() => new Promise(res => {
+  server.listen(PORT, () => {
+    t.teardown(() => server.close())
+    res()
+  })
+}))
 
 const registry = `http://localhost:${PORT}`
 const newArb = opt => new Arborist({...opt, registry})
@@ -180,8 +180,8 @@ t.test('verify dep flags in script environments', async t => {
   // sort into a predictable order and pull out the fields we wanna test
   // don't include path or env, because that's going to be platform-specific
   const saved = [...arb.scriptsRun]
-    .sort(({path:patha,event:eventa}, {path:pathb,event:eventb}) =>
-      patha.localeCompare(pathb) || eventa.localeCompare(eventb))
+    .sort(({path: patha, event: eventa}, {path: pathb, event: eventb}) =>
+      patha.localeCompare(pathb, 'en') || eventa.localeCompare(eventb, 'en'))
     .map(({pkg, event, cmd, code, signal, stdout, stderr}) =>
       ({pkg, event, cmd, code, signal, stdout, stderr}))
   t.matchSnapshot(saved, 'saved script results')
@@ -191,24 +191,23 @@ t.test('verify dep flags in script environments', async t => {
     t.strictSame(flags, fs.readFileSync(file, 'utf8').split('\n'), pkg)
   }
   t.strictSame(checkLogs().sort((a, b) =>
-    a[2].localeCompare(b[2]) || (typeof a[4] === 'string' ? -1 : 1)), [
-    ['info','run','devdep@1.0.0','postinstall','node_modules/devdep','node ../../env.js'],
-    ['info','run','devdep@1.0.0','postinstall',{code: 0, signal: null}],
-    ['info','run','devopt@1.0.0','postinstall','node_modules/devopt','node ../../env.js'],
-    ['info','run','devopt@1.0.0','postinstall',{code: 0, signal: null}],
-    ['info','run','opt-and-dev@1.0.0','postinstall','node_modules/opt-and-dev','node ../../env.js'],
-    ['info','run','opt-and-dev@1.0.0','postinstall',{code: 0, signal: null}],
-    ['info','run','optdep@1.0.0','postinstall','node_modules/optdep','node ../../env.js'],
-    ['info','run','optdep@1.0.0','postinstall',{code: 0, signal: null}],
+    a[2].localeCompare(b[2], 'en') || (typeof a[4] === 'string' ? -1 : 1)), [
+    ['info', 'run', 'devdep@1.0.0', 'postinstall', 'node_modules/devdep', 'node ../../env.js'],
+    ['info', 'run', 'devdep@1.0.0', 'postinstall', {code: 0, signal: null}],
+    ['info', 'run', 'devopt@1.0.0', 'postinstall', 'node_modules/devopt', 'node ../../env.js'],
+    ['info', 'run', 'devopt@1.0.0', 'postinstall', {code: 0, signal: null}],
+    ['info', 'run', 'opt-and-dev@1.0.0', 'postinstall', 'node_modules/opt-and-dev', 'node ../../env.js'],
+    ['info', 'run', 'opt-and-dev@1.0.0', 'postinstall', {code: 0, signal: null}],
+    ['info', 'run', 'optdep@1.0.0', 'postinstall', 'node_modules/optdep', 'node ../../env.js'],
+    ['info', 'run', 'optdep@1.0.0', 'postinstall', {code: 0, signal: null}],
   ], 'logged script executions at info level')
 })
-
 
 t.test('run scripts in foreground if foregroundScripts set', async t => {
   const path = fixture(t, 'rebuild-foreground-scripts')
   const RUNS = []
   let tick = 0
-  const Arborist = requireInject('../../lib/arborist/index.js', {
+  const Arborist = t.mock('../../lib/arborist/index.js', {
     '@npmcli/run-script': async opts => {
       // ensure that they don't get parallelized
       const run = tick++
@@ -216,10 +215,10 @@ t.test('run scripts in foreground if foregroundScripts set', async t => {
       await new Promise(res => setTimeout(res))
       RUNS.push({opts, finished: true, run})
       return {code: 0, signal: null}
-    }
+    },
   })
 
-  const arb = new Arborist({path, foregroundScripts: true})
+  const arb = new Arborist({path, registry, foregroundScripts: true})
   await arb.rebuild()
   // add a sentinel to make sure we didn't get too many entries, since
   // t.match() will allow trailing/extra values in the test object.
@@ -255,17 +254,17 @@ t.test('log failed exit codes as well, even if we dont crash', async t => {
             preinstall: 'exit 1',
           },
         }),
-      }
-    }
+      },
+    },
   })
-  const arb = new Arborist({path})
+  const arb = newArb({path})
   const checkLogs = logTracker()
   await arb.rebuild({ handleOptionalFailure: true })
   t.strictSame(checkLogs(), [
     ['info', 'run', 'optdep@1.2.3', 'preinstall', 'node_modules/optdep', 'exit 1'],
     ['info', 'run', 'optdep@1.2.3', 'preinstall', { code: 1, signal: null }],
     ['verbose', 'reify', 'failed optional dependency', resolve(path, 'node_modules/optdep')],
-    ['silly', 'reify', 'mark', 'deleted', [resolve(path, 'node_modules/optdep')]]
+    ['silly', 'reify', 'mark', 'deleted', [resolve(path, 'node_modules/optdep')]],
   ])
 })
 
@@ -304,7 +303,7 @@ t.test('do not build if theres a conflicting globalTop bin', async t => {
         },
       },
     },
-    bin: {}
+    bin: {},
   })
   const file = isWindows ? `${path}/lib/foo.cmd` : `${path}/bin/foo`
   fs.writeFileSync(file, 'this is not the linked bin')
@@ -314,7 +313,7 @@ t.test('do not build if theres a conflicting globalTop bin', async t => {
     version: '1.2.3',
     scripts: {
       // try to get clever...
-      preinstall: `node -e 'require("fs").unlinkSync(${JSON.stringify(file)})'`,
+      preinstall: `node -e "require('fs').unlinkSync(process.argv[1])" ${JSON.stringify(file)}`,
     },
   }))
 
@@ -340,7 +339,7 @@ t.test('force overwrite the conflicting globalTop bin', async t => {
         },
       },
     },
-    bin: {}
+    bin: {},
   })
   const file = isWindows ? `${path}/lib/foo.cmd` : `${path}/bin/foo`
   fs.writeFileSync(file, 'this is not the linked bin')
@@ -353,7 +352,7 @@ t.test('force overwrite the conflicting globalTop bin', async t => {
   await arb.rebuild()
   const isCorrect = isWindows ? 'isFile' : 'isSymbolicLink'
   t.equal(fs.lstatSync(file)[isCorrect](), true, 'bin was linked')
-  t.notEqual(fs.readFileSync(file, 'utf8'), 'this is not the linked bin')
+  t.not(fs.readFileSync(file, 'utf8'), 'this is not the linked bin')
 })
 
 t.test('checkBins is fine if no bins', async t => {
@@ -369,7 +368,7 @@ t.test('checkBins is fine if no bins', async t => {
         },
       },
     },
-    bin: {}
+    bin: {},
   })
   const file = isWindows ? `${path}/lib/foo.cmd` : `${path}/bin/foo`
   fs.writeFileSync(file, 'this is not the linked bin')
@@ -385,11 +384,11 @@ t.test('checkBins is fine if no bins', async t => {
 t.test('rebuild node-gyp dependencies lacking both preinstall and install scripts', async t => {
   // use require-inject so we don't need an actual massive binary dep fixture
   const RUNS = []
-  const Arborist = requireInject('../../lib/arborist/index.js', {
+  const Arborist = t.mock('../../lib/arborist/index.js', {
     '@npmcli/run-script': async opts => {
       RUNS.push(opts)
       return {code: 0, signal: null}
-    }
+    },
   })
   const path = t.testdir({
     node_modules: {
@@ -406,7 +405,7 @@ t.test('rebuild node-gyp dependencies lacking both preinstall and install script
       dependencies: {
         dep: '1',
       },
-    })
+    }),
   })
   const arb = new Arborist({ path, registry })
   await arb.rebuild()
@@ -423,20 +422,19 @@ t.test('rebuild node-gyp dependencies lacking both preinstall and install script
         npm_package_optional: '',
         npm_package_dev: '',
         npm_package_peer: '',
-        npm_package_dev_optional: ''
+        npm_package_dev_optional: '',
       },
-      scriptShell: undefined
-    }
+      scriptShell: undefined,
+    },
   ])
 })
 
 t.test('do not rebuild node-gyp dependencies with gypfile:false', async t => {
   // use require-inject so we don't need an actual massive binary dep fixture
-  const RUNS = []
-  const Arborist = requireInject('../../lib/arborist/index.js', {
+  const Arborist = t.mock('../../lib/arborist/index.js', {
     '@npmcli/run-script': async opts => {
       throw new Error('should not run any scripts')
-    }
+    },
   })
   const path = t.testdir({
     node_modules: {
@@ -454,7 +452,7 @@ t.test('do not rebuild node-gyp dependencies with gypfile:false', async t => {
       dependencies: {
         dep: '1',
       },
-    })
+    }),
   })
   const arb = new Arborist({ path, registry })
   await arb.rebuild()
@@ -489,7 +487,7 @@ t.test('workspaces', async t => {
   })
 
   const RUNS = []
-  const Arborist = requireInject('../../lib/arborist/index.js', {
+  const Arborist = t.mock('../../lib/arborist/index.js', {
     '@npmcli/run-script': opts => {
       RUNS.push(opts)
       return require('@npmcli/run-script')(opts)
@@ -538,7 +536,7 @@ t.test('workspaces', async t => {
     })
 
     const RUNS = []
-    const Arborist = requireInject('../../lib/arborist/index.js', {
+    const Arborist = t.mock('../../lib/arborist/index.js', {
       '@npmcli/run-script': async opts => {
         RUNS.push(opts)
         return {code: 0, signal: null}
@@ -586,7 +584,7 @@ t.test('workspaces', async t => {
     })
 
     const RUNS = []
-    const Arborist = requireInject('../../lib/arborist/index.js', {
+    const Arborist = t.mock('../../lib/arborist/index.js', {
       '@npmcli/run-script': async opts => {
         RUNS.push(opts)
         return {code: 0, signal: null}
@@ -611,4 +609,107 @@ t.test('workspaces', async t => {
       'bin symlink is put into place'
     )
   })
+})
+
+t.test('put bins in the right place for linked-global top pkgs', async t => {
+  const path = t.testdir({
+    lib: t.fixture('symlink', 'target'),
+    target: {
+      node_modules: {
+        foo: {
+          'package.json': JSON.stringify({
+            name: 'foo',
+            version: '1.2.3',
+            bin: 'foo',
+          }),
+          foo: 'the bin script',
+        },
+      },
+    },
+  })
+  const binpath = resolve(path, isWindows ? 'lib' : 'bin')
+  const arb = newArb({ path: path + '/lib', global: true })
+  await arb.rebuild()
+  const expect = isWindows ? [
+    'foo',
+    'foo.cmd',
+    'foo.ps1',
+  ] : ['foo']
+  const test = isWindows ? 'isFile' : 'isSymbolicLink'
+  for (const f of expect) {
+    const p = resolve(binpath, f)
+    const rel = relpath(t.testdirName, p)
+    t.equal(fs.lstatSync(p)[test](), true, `${test} ${rel}`)
+  }
+})
+
+t.test('only rebuild for workspace', async t => {
+  const path = t.testdir({
+    'package.json': JSON.stringify({
+      workspaces: ['packages/*'],
+      dependencies: {
+        inroot: '*',
+      },
+    }),
+    node_modules: {
+      a: t.fixture('symlink', '../packages/a'),
+      b: t.fixture('symlink', '../packages/b'),
+      inroot: {
+        'package.json': JSON.stringify({
+          name: 'inroot',
+          version: '1.2.3',
+          scripts: {
+            install: 'exit 1',
+          },
+        }),
+      },
+      adep: {
+        'package.json': JSON.stringify({
+          name: 'adep',
+          version: '1.2.3',
+          scripts: {
+            install: 'node adep.js',
+          },
+        }),
+        'adep.js': `require('fs').writeFileSync('adep.txt', 'adep')`,
+      },
+      bdep: {
+        'package.json': JSON.stringify({
+          name: 'bdep',
+          version: '1.2.3',
+          scripts: {
+            install: 'node bdep.js',
+          },
+        }),
+        'bdep.js': `require('fs').writeFileSync('bdep.txt', 'bdep')`,
+      },
+    },
+    packages: {
+      a: {
+        'package.json': JSON.stringify({
+          name: 'a',
+          version: '1.2.3',
+          dependencies: {
+            adep: '*',
+          },
+        }),
+      },
+      b: {
+        'package.json': JSON.stringify({
+          name: 'b',
+          version: '1.2.3',
+          dependencies: {
+            bdep: '*',
+          },
+        }),
+      },
+    },
+  })
+
+  const arb = newArb({ path, workspaces: ['a'] })
+  await arb.rebuild()
+  const adepTxt = resolve(path, 'node_modules/adep/adep.txt')
+  const bdepTxt = resolve(path, 'node_modules/bdep/bdep.txt')
+  t.equal(fs.readFileSync(adepTxt, 'utf8'), 'adep', 'adep rebuilt')
+  t.throws(() => fs.readFileSync(bdepTxt, 'utf8'), { code: 'ENOENT' }, 'bdep not rebuilt')
 })

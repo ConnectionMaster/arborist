@@ -1,48 +1,49 @@
 const Inventory = require('../lib/inventory.js')
 const t = require('tap')
-const requireInject = require('require-inject')
 
 t.test('basic operations', t => {
   const i = new Inventory()
   t.equal(i.primaryKey, 'location')
-  t.same(i.indexes, ['name', 'license', 'funding', 'realpath'])
+  t.same(i.indexes, ['name', 'license', 'funding', 'realpath', 'packageName'])
 
-  i.add({ location: 'x', name: 'x', 'package': { license: 'MIT', funding: 'foo' }})
-  i.add({ location: 'y', name: 'x', 'package': { license: 'ISC', funding: { url: 'foo' } }})
-  i.add({ location: 'z', name: 'z', 'package': { license: { type: 'MIT' }, funding: 'bar' }})
-  i.add({ location: 'a', name: 'a', 'package': {}})
+  // uk spelling
+  i.add({ location: 'x', name: 'x', package: { licence: 'MIT', funding: 'foo' }})
+  // old-style multi-license array
+  i.add({ location: 'y', name: 'x', package: { licenses: [{ type: 'ISC' }], funding: { url: 'foo' } }})
+  i.add({ location: 'z', name: 'z', package: { license: { type: 'MIT' }, funding: 'bar' }})
+  i.add({ location: 'a', name: 'a', package: {}})
 
   t.same(i.filter(node => /[xy]/.test(node.name)), [
     i.get('x'),
     i.get('y'),
   ], 'filter returns an iterable of all matching nodes')
 
-  t.same([...i.query('license')].sort((a,b) => String(a).localeCompare(String(b))),
-    [ 'ISC', 'MIT', undefined ])
+  t.same([...i.query('license')].sort((a, b) => String(a).localeCompare(String(b, 'en'))),
+    ['ISC', 'MIT', undefined])
   t.same([...i.query('license', 'MIT')], [
-    { location: 'x', name: 'x', 'package': { license: 'MIT', funding: 'foo' }},
-    { location: 'z', name: 'z', 'package': { license: { type: 'MIT' }, funding: 'bar'}},
+    { location: 'x', name: 'x', package: { licence: 'MIT', funding: 'foo' }},
+    { location: 'z', name: 'z', package: { license: { type: 'MIT' }, funding: 'bar'}},
   ], 'can query by license')
   t.same(i.query('license', 'blerg'), new Set(),
     'empty query returns empty set')
   t.same([...i.query('name', 'x')], [
-    { location: 'x', name: 'x', 'package': { license: 'MIT', funding: 'foo'}},
-    { location: 'y', name: 'x', 'package': { license: 'ISC', funding: { url: 'foo' } }},
+    { location: 'x', name: 'x', package: { licence: 'MIT', funding: 'foo'}},
+    { location: 'y', name: 'x', package: { licenses: [{ type: 'ISC' }], funding: { url: 'foo' } }},
   ], 'can query by name')
-  t.same([...i.query('funding')].sort((a, b) => String(a).localeCompare(String(b))),
+  t.same([...i.query('funding')].sort((a, b) => String(a).localeCompare(String(b, 'en'))),
     ['bar', 'foo', undefined])
   t.same([...i.query('funding', 'foo')], [
-    { location: 'x', name: 'x', 'package': { license: 'MIT', funding: 'foo' } },
-    { location: 'y', name: 'x', 'package': { license: 'ISC', funding: { url: 'foo' } }},
+    { location: 'x', name: 'x', package: { licence: 'MIT', funding: 'foo' } },
+    { location: 'y', name: 'x', package: { licenses: [{ type: 'ISC' }], funding: { url: 'foo' } }},
   ], 'can query by funding url')
 
   const x = i.get('x')
-  t.same(x, { location: 'x', name: 'x', 'package': { license: 'MIT', funding: 'foo' }}, 'get by location')
+  t.same(x, { location: 'x', name: 'x', package: { licence: 'MIT', funding: 'foo' }}, 'get by location')
   i.add(x)
   t.same(i.get('x'), x, 'adding a second time has no effect')
   t.equal(i.has(x), true, 'has a node')
-  i.add({ location: 'x', name: 'a', 'package': { license: 'ABC' }})
-  t.same(i.get('x'), { location: 'x', name: 'a', 'package': { license: 'ABC' }},
+  i.add({ location: 'x', name: 'a', package: { licences: [{ type: 'ABC' }] }})
+  t.same(i.get('x'), { location: 'x', name: 'a', package: { licences: [{ type: 'ABC' }] }},
     'new node at same location overwrites')
   t.equal(i.has(x), false, 'node has been overwritten')
 
@@ -75,20 +76,34 @@ t.test('basic operations', t => {
     i.add({
       location: 'f',
       name: 'f',
-      'package': {
+      package: {
         license: 'MIT',
-        funding: null
-      }
-    }) , 'doesnt throw on falsy funding info')
+        funding: null,
+      },
+    }), 'doesnt throw on falsy funding info')
 
   t.doesNotThrow(() =>
     i.add({
       location: 'l',
       name: 'l',
-      'package': {
-        license: null
-      }
-    }) , 'doesnt throw on falsy license info')
+      package: {
+        license: null,
+      },
+    }), 'doesnt throw on falsy license info')
+
+  // inherited properties and getters are allowed
+  const n = Object.assign(Object.create({
+    location: 'n',
+    get packageName () {
+      return this.package.name
+    },
+    get package () {
+      return this._pkg
+    },
+  }), { _pkg: { name: 'n' }})
+  i.add(n)
+  t.equal(i.get('n'), n, 'found by inherited location')
+  t.same([...i.query('packageName', 'n')], [n], 'found by packageName query')
 
   t.end()
 })
@@ -107,13 +122,13 @@ t.test('dont allow external nodes to be added to inventory', t => {
 })
 
 t.test('adding external nodes is no-op outside debug mode', t => {
-  const Inventory = requireInject('../lib/inventory.js', {
+  const Inventory = t.mock('../lib/inventory.js', {
     '../lib/debug.js': () => {},
   })
   const i = new Inventory()
   const root = { location: '', path: 'rootpath' }
   i.add(root)
-  other = {root: {path: 'otherroot'}, location: 'adsf', path: 'nodepath'}
+  const other = {root: {path: 'otherroot'}, location: 'adsf', path: 'nodepath'}
   i.add(other)
   t.equal(i.has(other), false, 'did not add external node to inventory')
   t.end()

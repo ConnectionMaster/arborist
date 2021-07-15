@@ -47,6 +47,7 @@ const symlinks = {
   'deeproot': 'deep',
   'badlink/node_modules/foo': 'foo',
   'badlink/node_modules/bar': 'baz',
+  'testing-peer-deps-link': 'testing-peer-deps',
 
   'workspace/node_modules/a': '../packages/a',
   'workspace/node_modules/b': '../packages/b',
@@ -132,6 +133,8 @@ const symlinks = {
   'workspaces-add-new-dep/node_modules/a': '../a',
 
   'workspaces-non-simplistic/node_modules/pkg-a': '../a',
+
+  'testing-bundledeps-link': './testing-bundledeps-2',
 }
 
 const cleanup = () => Object.keys(symlinks).forEach(s => {
@@ -164,7 +167,7 @@ const setup = () => {
       `### BEGIN IGNORED SYMLINKS ###
 ### this list is generated automatically, do not edit directly
 ### update it by running \`node test/fixtures/index.js\`
-${links.sort((a,b) => a.localeCompare(b)).join('\n')}
+${links.sort((a,b) => a.localeCompare(b, 'en')).join('\n')}
 ### END IGNORED SYMLINKS ###`)
     writeFileSync(gifile, gitignore)
   }

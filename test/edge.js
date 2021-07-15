@@ -40,7 +40,9 @@ const top = {
   edgesIn: new Set(),
   explain: () => 'top node explanation',
   package: { name: 'top', version: '1.2.3' },
-  get version () { return this.package.version },
+  get version () {
+    return this.package.version
+  },
   isTop: true,
   parent: null,
   resolve (n) {
@@ -59,7 +61,9 @@ const a = {
   edgesIn: new Set(),
   explain: () => 'a explanation',
   package: { name: 'a', version: '1.2.3' },
-  get version () { return this.package.version },
+  get version () {
+    return this.package.version
+  },
   isTop: false,
   parent: top,
   resolve (n) {
@@ -78,7 +82,9 @@ const b = {
   edgesIn: new Set(),
   explain: () => 'b explanation',
   package: { name: 'b', version: '1.2.3' },
-  get version () { return this.package.version },
+  get version () {
+    return this.package.version
+  },
   isTop: false,
   parent: top,
   resolve (n) {
@@ -97,7 +103,9 @@ const bb = {
   edgesIn: new Set(),
   explain: () => 'bb explanation',
   package: { name: 'bb', version: '1.2.3' },
-  get version () { return this.package.version },
+  get version () {
+    return this.package.version
+  },
   isTop: false,
   parent: b,
   resolve (n) {
@@ -116,7 +124,9 @@ const aa = {
   edgesIn: new Set(),
   explain: () => 'aa explanation',
   package: { name: 'aa', version: '1.2.3' },
-  get version () { return this.package.version },
+  get version () {
+    return this.package.version
+  },
   isTop: false,
   parent: a,
   resolve (n) {
@@ -135,7 +145,9 @@ const c = {
   edgesIn: new Set(),
   explain: () => 'c explanation',
   package: { name: 'c', version: '2.3.4' },
-  get version () { return this.package.version },
+  get version () {
+    return this.package.version
+  },
   isTop: false,
   parent: top,
   resolve (n) {
@@ -252,7 +264,7 @@ t.matchSnapshot(moving, 'old location, missing dep')
 bb.parent = a
 moving.reload()
 const explAfterMove = moving.explain()
-t.notEqual(explBeforeMove, explAfterMove, 'moving reloads the explanation')
+t.not(explBeforeMove, explAfterMove, 'moving reloads the explanation')
 t.matchSnapshot(moving, 'new location, found dep')
 bb.parent = top
 moving.reload()
@@ -372,7 +384,7 @@ t.test('convenience type getter flags', async t => {
   t.equal(explainEdge.explain(), expl)
   t.matchSnapshot(expl, 'explanation')
   explainEdge.detach()
-  t.notEqual(explainEdge.explain(), expl)
+  t.not(explainEdge.explain(), expl)
 })
 
 // FIXME: once we drop support to node10 we can remove this
@@ -428,3 +440,67 @@ t.match(
   },
   'should return a minimal human-readable representation of the edge obj'
 )
+
+const bundleChild = {
+  name: 'bundle-child',
+  edgesOut: new Map(),
+  edgesIn: new Set(),
+  explain: () => 'bundleChild explanation',
+  package: { name: 'bundle-child', version: '1.2.3' },
+  get version () {
+    return this.package.version
+  },
+  isTop: false,
+  parent: top,
+  resolve (n) {
+    return this.parent.resolve(n)
+  },
+  addEdgeOut (edge) {
+    this.edgesOut.set(edge.name, edge)
+  },
+  addEdgeIn (edge) {
+    this.edgesIn.add(edge)
+  },
+}
+
+const bundleParent = {
+  name: 'bundle-parent',
+  edgesOut: new Map(),
+  edgesIn: new Set(),
+  explain: () => 'bundleParent explanation',
+  package: { name: 'bundle-parent', version: '5.6.7', bundleDependencies: ['bundle-child'] },
+  get version () {
+    return this.package.version
+  },
+  isTop: false,
+  parent: top,
+  resolve (n) {
+    return n === 'bundle-child' ? bundleChild : undefined
+  },
+  addEdgeOut (edge) {
+    this.edgesOut.set(edge.name, edge)
+  },
+  addEdgeIn (edge) {
+    this.edgesIn.add(edge)
+  },
+}
+
+const bundledEdge = new Edge({
+  from: bundleParent,
+  type: 'prod',
+  name: 'bundle-child',
+  spec: '1.2.3',
+})
+
+t.ok(bundledEdge.satisfiedBy(bundleChild), 'bundled dependency')
+const fromBundleDependencies = bundledEdge.from && bundledEdge.from.package.bundleDependencies
+t.same(fromBundleDependencies, ['bundle-child'], 'edge.from bundledDependencies as expected')
+t.same(bundledEdge.name, 'bundle-child', 'edge name as expected')
+t.equal(bundledEdge.bundled, true, 'bundled prop is true')
+t.same(bundledEdge.explain(), {
+  type: 'prod',
+  name: 'bundle-child',
+  spec: '1.2.3',
+  bundled: true,
+  from: bundleParent.explain(),
+}, 'bundled edge.explain as expected')

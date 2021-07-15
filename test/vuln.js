@@ -2,10 +2,6 @@ const t = require('tap')
 const Vuln = require('../lib/vuln.js')
 const Node = require('../lib/node.js')
 
-const Calculator = require('@npmcli/metavuln-calculator')
-
-const cache = t.testdir()
-
 const semver = require('semver')
 const semverOpt = { includePrerelease: true, loose: true }
 class MockAdvisory {
@@ -14,6 +10,7 @@ class MockAdvisory {
     this.vulnerableVersions = this.versions.filter(v =>
       semver.satisfies(v, this.range, semverOpt))
   }
+
   testVersion (v) {
     return this.vulnerableVersions.includes(v)
   }
@@ -87,10 +84,11 @@ t.test('basic vulnerability object tests', async t => {
   })
 
   const v = new Vuln({ name: 'name', advisory: crit })
-  t.isa(v, Vuln)
+  t.type(v, Vuln)
   t.equal(v.testSpec('github:foo/bar'), true)
   t.equal(v.testSpec('0.x'), false)
   t.equal(v.testSpec('>4.x'), true)
+  t.equal(v.testSpec('npm:name@>4.x'), true)
   t.strictSame([...v.advisories], [crit])
   t.equal(v.severity, 'critical')
   v.addAdvisory(low)

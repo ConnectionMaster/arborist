@@ -2,7 +2,6 @@ const Shrinkwrap = require('../lib/shrinkwrap.js')
 const Node = require('../lib/node.js')
 const Link = require('../lib/link.js')
 const calcDepFlags = require('../lib/calc-dep-flags.js')
-const mutateFS = require('mutate-fs')
 const fs = require('fs')
 const Arborist = require('../lib/arborist/index.js')
 const rimraf = require('rimraf')
@@ -12,7 +11,7 @@ const t = require('tap')
 const normalizePath = path => path.replace(/[A-Z]:/, '').replace(/\\/g, '/')
 t.cleanSnapshot = s => s.split(process.cwd()).join('{CWD}')
 
-const {relative, resolve} = require('path')
+const {resolve} = require('path')
 const fixture = resolve(__dirname, 'fixtures/install-types')
 const swonlyFixture = resolve(__dirname, 'fixtures/install-types-sw-only')
 const YarnLock = require('../lib/yarn-lock.js')
@@ -25,7 +24,8 @@ const hidden = 'node_modules/.package-lock.json'
 const saxFixture = resolve(__dirname, 'fixtures/sax')
 
 // start out with the file being fresh
-fs.utimesSync(resolve(hiddenLockfileFixture, hidden), new Date(), new Date())
+const later = Date.now() + 10000
+fs.utimesSync(resolve(hiddenLockfileFixture, hidden), new Date(later), new Date(later))
 
 t.test('shrinkwrap key order', async t => t.matchSnapshot(Shrinkwrap.keyOrder))
 
@@ -111,16 +111,16 @@ t.test('look up from locks and such', t =>
       name: 'a',
       version: '1.2.3',
       dependencies: {
-        "abbrev": "^1.1.1",
-        "full-git-url": "git+https://github.com/isaacs/abbrev-js.git",
-        "ghshort": "github:isaacs/abbrev-js",
-        "old": "npm:abbrev@^1.0.3",
-        "pinned": "npm:abbrev@^1.1.1",
-        "reg": "npm:abbrev@^1.1.1",
-        "remote": "https://registry.npmjs.org/abbrev/-/abbrev-1.1.1.tgz",
-        "symlink": "file:./abbrev-link-target",
-        "tarball": "file:abbrev-1.1.1.tgz",
-        "bundler": "1.2.3",
+        abbrev: '^1.1.1',
+        'full-git-url': 'git+https://github.com/isaacs/abbrev-js.git',
+        ghshort: 'github:isaacs/abbrev-js',
+        old: 'npm:abbrev@^1.0.3',
+        pinned: 'npm:abbrev@^1.1.1',
+        reg: 'npm:abbrev@^1.1.1',
+        remote: 'https://registry.npmjs.org/abbrev/-/abbrev-1.1.1.tgz',
+        symlink: 'file:./abbrev-link-target',
+        tarball: 'file:abbrev-1.1.1.tgz',
+        bundler: '1.2.3',
       },
     }, 'root metadata')
     t.match(m.data, {
@@ -392,8 +392,8 @@ t.test('saving dependency-free shrinkwrap object', t => {
     'package.json': JSON.stringify({
       name: 'badsave',
       version: '1.0.0',
-      description: 'no node_modules/ will fail'
-    })
+      description: 'no node_modules/ will fail',
+    }),
   })
 
   t.test('save meta lockfile into node_modules directory', async t => {
@@ -480,7 +480,6 @@ t.test('write the shrinkwrap back to disk', t => {
       s.delete(node.location)
       s.add(node)
       return s.save().then(() => {
-        const loc = relative(fixture, node.path).replace(/\\/g, '/')
         t.strictSame(s.data, postCommit, 'committed changes to data')
         t.strictSame(require(s.filename), s.data, 'saved json matches data')
       })
@@ -494,7 +493,7 @@ t.test('load shrinkwrap if no package-lock.json present', t => {
       lockfileVersion: 1,
       name: 'foo',
       version: '1.2.3',
-    })
+    }),
   })
   return Promise.all([
     Shrinkwrap.load({ path: dir, shrinkwrapOnly: true }).then(s =>
@@ -510,8 +509,8 @@ t.test('load shrinkwrap if no package-lock.json present', t => {
 
 t.test('load yarn.lock file if present', t =>
   Shrinkwrap.load({ path: yarnFixture }).then(s => {
-    t.isa(s.yarnLock, YarnLock, 'loaded a yarn lock file')
-    t.notEqual(s.yarnLock.entries.size, 0, 'got some entries')
+    t.type(s.yarnLock, YarnLock, 'loaded a yarn lock file')
+    t.not(s.yarnLock.entries.size, 0, 'got some entries')
   }))
 
 t.test('save yarn lock if loaded', t =>
@@ -528,7 +527,7 @@ t.test('ignore yarn lock file parse errors', t => {
     'yarn.lock': 'this is not a yarn lock file!',
   })
   return Shrinkwrap.load({ path: dir }).then(s => {
-    t.isa(s.yarnLock, YarnLock, 'got a yarn lock object because a yarn lock exists')
+    t.type(s.yarnLock, YarnLock, 'got a yarn lock object because a yarn lock exists')
     t.equal(s.yarnLock.entries.size, 0, 'did not get any entries out of it')
   })
 })
@@ -704,12 +703,15 @@ t.test('hidden lockfile only used if up to date', async t => {
     },
     'package.json': JSON.stringify({ dependencies: { abbrev: '1.1.1' }}),
   })
+
   // ensure that the lockfile is fresh to start
-  fs.utimesSync(resolve(path, hidden), new Date(), new Date())
   {
+    const later = Date.now() + 10000
+    fs.utimesSync(resolve(path, hidden), new Date(later), new Date(later))
     const s = await Shrinkwrap.load({ path, hiddenLockfile: true })
     t.equal(s.loadedFromDisk, true, 'loading from fresh lockfile')
   }
+
   // make the node_modules dir have a newer mtime by adding an entry
   // and setting the hidden lockfile back in time
   {
@@ -720,21 +722,96 @@ t.test('hidden lockfile only used if up to date', async t => {
     t.equal(s.loadedFromDisk, false, 'did not load from disk, updated nm')
     t.equal(s.loadingError, 'out of date, updated: node_modules')
   }
+
   // make the lockfile newer, but that new entry is still a problem
   {
-    fs.utimesSync(resolve(path, hidden), new Date(), new Date())
+    const later = Date.now() + 10000
+    fs.utimesSync(resolve(path, hidden), new Date(later), new Date(later))
     const s = await Shrinkwrap.load({ path, hiddenLockfile: true })
     t.equal(s.loadedFromDisk, false, 'did not load, new entry')
     t.equal(s.loadingError, 'missing from lockfile: node_modules/xyz')
   }
+
   // make the lockfile newer, but missing a folder from node_modules
   {
     rimraf.sync(resolve(path, 'node_modules/abbrev'))
     rimraf.sync(resolve(path, 'node_modules/xyz'))
-    fs.utimesSync(resolve(path, hidden), new Date(), new Date())
+    const later = Date.now() + 10000
+    fs.utimesSync(resolve(path, hidden), new Date(later), new Date(later))
     const s = await Shrinkwrap.load({ path, hiddenLockfile: true })
     t.equal(s.loadedFromDisk, false, 'did not load, missing entry')
     t.equal(s.loadingError, 'missing from node_modules: node_modules/abbrev')
+  }
+})
+
+t.test('hidden lockfile understands symlinks', async t => {
+  const path = t.testdir({
+    node_modules: {
+      '.package-lock.json': JSON.stringify({
+        name: 'hidden-lockfile-with-symlink',
+        lockfileVersion: 2,
+        requires: true,
+        packages: {
+          abbrev: {
+            version: '1.1.1',
+          },
+          'node_modules/abbrev': {
+            resolved: 'abbrev',
+            link: true,
+          },
+        },
+      }),
+      abbrev: t.fixture('symlink', '../abbrev'),
+
+      // a symlink missing a target is not relevant
+      missing: t.fixture('symlink', '../missing'),
+    },
+    abbrev: {
+      'package.json': JSON.stringify({
+        name: 'abbrev',
+        version: '1.1.1',
+      }),
+    },
+    'package.json': JSON.stringify({
+      dependencies: {
+        abbrev: 'file:abbrev',
+      },
+    }),
+  })
+
+  // respect it if not newer, and the target included in shrinkwrap
+  {
+    const later = Date.now() + 10000
+    fs.utimesSync(resolve(path, hidden), new Date(later), new Date(later))
+    const s = await Shrinkwrap.load({ path, hiddenLockfile: true })
+    t.equal(s.loadedFromDisk, true, 'loaded from disk')
+    t.equal(s.filename, resolve(path, hidden))
+  }
+
+  // don't respect if the target is newer than hidden shrinkwrap
+  {
+    const later = Date.now() + 20000
+    fs.utimesSync(resolve(path, 'abbrev/package.json'), new Date(later), new Date(later))
+    fs.utimesSync(resolve(path, 'abbrev'), new Date(later), new Date(later))
+    const s = await Shrinkwrap.load({ path, hiddenLockfile: true })
+    t.equal(s.loadedFromDisk, false, 'not loaded from disk')
+    t.equal(s.filename, resolve(path, hidden))
+  }
+
+  // don't respect it if the target is not in hidden shrinkwrap
+  {
+    fs.mkdirSync(resolve(path, 'missing'))
+    fs.writeFileSync(resolve(path, 'missing/package.json'), JSON.stringify({
+      name: 'missing',
+      version: '1.2.3',
+    }))
+    // even though it's newer, the 'missing' is not found in the lock
+    const later = Date.now() + 30000
+    fs.utimesSync(resolve(path, hidden), new Date(later), new Date(later))
+
+    const s = await Shrinkwrap.load({ path, hiddenLockfile: true })
+    t.equal(s.loadedFromDisk, false, 'not loaded from disk')
+    t.equal(s.filename, resolve(path, hidden))
   }
 })
 
@@ -781,7 +858,7 @@ t.test('a yarn.lock entry with integrity mismatch', async t => {
 mkdirp@^1.0.2:
   version "1.0.2"
   resolved "https://registry.yarnpkg.com/mkdirp/-/mkdirp-1.0.2.tgz#5ccd93437619ca7050b538573fc918327eba98fb"
-  integrity "um, nope, not even close buddy"
+  integrity "sha512-N2REVrJ/X/jGPfit2d7zea2J1pf7EAR5chIUcfHffAZ7gmlam5U65sAm76+o4ntQbSRdTjYf7qZz3chuHlwXEA=="
 `,
     'package.json': JSON.stringify({
       name: 'root',
@@ -795,7 +872,7 @@ mkdirp@^1.0.2:
           version: '1.0.2',
           _resolved: 'https://registry.npmjs.org/mkdirp/-/mkdirp-1.0.2.tgz',
           // integrity mismatch
-          _integrity: 'sha512-N2REVrJ/X/jGPfit2d7zea2J1pf7EAR5chIUcfHffAZ7gmlam5U65sAm76+o4ntQbSRdTjYf7qZz3chuHlwXEA=='
+          _integrity: 'um, nope, not even close buddy',
         }),
       },
     },
@@ -872,7 +949,6 @@ mkdirp@file:mkdirp:
   t.matchSnapshot(tree.meta.data, 'lockfile')
   t.matchSnapshot(tree.meta.yarnLock.toString(), 'yarn.lock')
 })
-
 
 t.test('a yarn.lock entry with no integrity', async t => {
   const path = t.testdir({
@@ -969,8 +1045,8 @@ t.test('set integrity because location and resolved match', async t => {
         resolved: 'https://registry.npmjs.org/foo/foo-1.2.3.tgz',
         version: '1.2.3',
         integrity: 'sha512-happyhappyjoyjoy',
-      }
-    }
+      },
+    },
   }
   const root = new Node({
     path: '/some/path',
@@ -982,7 +1058,7 @@ t.test('set integrity because location and resolved match', async t => {
     pkg: {
       version: '1.2.3',
       _resolved: 'https://registry.npmjs.org/foo/foo-1.2.3.tgz',
-    }
+    },
   })
   t.equal(foo.integrity, 'sha512-happyhappyjoyjoy')
 })
@@ -997,8 +1073,8 @@ t.test('set integrity because location matches and no resolved', async t => {
         resolved: 'https://registry.npmjs.org/foo/foo-1.2.3.tgz',
         version: '1.2.3',
         integrity: 'sha512-happyhappyjoyjoy',
-      }
-    }
+      },
+    },
   }
   const root = new Node({
     path: '/some/path',
@@ -1009,7 +1085,7 @@ t.test('set integrity because location matches and no resolved', async t => {
     name: 'foo',
     pkg: {
       version: '1.2.3',
-    }
+    },
   })
   t.equal(foo.resolved, 'https://registry.npmjs.org/foo/foo-1.2.3.tgz')
   t.equal(foo.integrity, 'sha512-happyhappyjoyjoy')
@@ -1024,8 +1100,8 @@ t.test('set integrity but no resolved', async t => {
       'node_modules/foo': {
         version: '1.2.3',
         integrity: 'sha512-happyhappyjoyjoy',
-      }
-    }
+      },
+    },
   }
   const root = new Node({
     path: '/some/path',
@@ -1036,7 +1112,7 @@ t.test('set integrity but no resolved', async t => {
     name: 'foo',
     pkg: {
       version: '1.2.3',
-    }
+    },
   })
   t.equal(foo.resolved, null)
   t.equal(foo.integrity, 'sha512-happyhappyjoyjoy')
@@ -1092,8 +1168,8 @@ t.test('get meta from yarn.lock', t => {
       },
       devDependencies: {
         bar: '2.x',
-      }
-    }
+      },
+    },
   })
 
   const foo = new Node({
@@ -1209,7 +1285,7 @@ t.test('get meta from yarn.lock', t => {
       name: 'foo',
       version: '2.3.4',
     },
-    parent: tree
+    parent: tree,
   })
   t.equal(foo2.integrity, null, 'no integrity, entry invalid')
   t.equal(foo2.resolved, null, 'no resolved, entry invalid')
@@ -1284,7 +1360,7 @@ t.test('metadata that only has one of resolved/integrity', t => {
 t.test('load an ancient lockfile', async t =>
   t.match(await Shrinkwrap.load({ path: saxFixture }), { ancientLockfile: true }))
 
-t.only('shrinkwrap where root is a link node', async t => {
+t.test('shrinkwrap where root is a link node', async t => {
   const meta = await Shrinkwrap.reset({ path: '/actual/project/path' })
   const root = new Link({
     path: '/some/link/path',
@@ -1306,30 +1382,30 @@ t.only('shrinkwrap where root is a link node', async t => {
   })
 
   t.strictSame(root.meta.commit(), {
-    "lockfileVersion": 2,
-    "requires": true,
-    "packages": {
-      "": {
-        "version": "1.2.3",
-        "dependencies": {
-          "kid": ""
+    lockfileVersion: 2,
+    requires: true,
+    packages: {
+      '': {
+        version: '1.2.3',
+        dependencies: {
+          kid: '',
         },
-        "extraneous": true
+        extraneous: true,
       },
-      "node_modules/kid": {
-        "version": "1.2.3",
-        "extraneous": true
-      }
+      'node_modules/kid': {
+        version: '1.2.3',
+        extraneous: true,
+      },
     },
-    "dependencies": {
-      "kid": {
-        "version": "1.2.3",
-        "extraneous": true
-      }
+    dependencies: {
+      kid: {
+        version: '1.2.3',
+        extraneous: true,
+      },
     },
-    "name": "path",
-    "version": "1.2.3",
-    "extraneous": true
+    name: 'path',
+    version: '1.2.3',
+    extraneous: true,
   })
 })
 
@@ -1341,4 +1417,49 @@ t.test('prioritize npm-shrinkwrap.json over package-lock.json', async t => {
   })
   const sw = await Shrinkwrap.load({path})
   t.equal(sw.type, 'npm-shrinkwrap.json')
+})
+
+t.test('do not add metadata if versions mismatch', async t => {
+  const meta = new Shrinkwrap({ path: '/home/user/projects/root' })
+  // fake load
+  meta.data = {
+    lockfileVersion: 2,
+    requires: true,
+    dependencies: {},
+    packages: {},
+  }
+
+  const root = new Node({
+    path: '/home/usr/projects/root',
+    meta,
+    pkg: {
+      name: 'root',
+      version: '1.2.3',
+      dependencies: {
+        foo: '1',
+      },
+    },
+    children: [
+      {
+        name: 'foo',
+        pkg: {
+          name: 'foo',
+          version: '1.0.0',
+        },
+        resolved: 'https://registry.npmjs.org/foo-1.0.0.tgz',
+        integrity: 'sha512-this is no sha of mine',
+      },
+    ],
+  })
+  const oldFoo = root.children.get('foo')
+  const newFoo = new Node({
+    path: oldFoo.path,
+    root,
+    pkg: {
+      name: 'foo',
+      version: '1.2.3',
+    },
+  })
+  t.equal(newFoo.resolved, null)
+  t.equal(newFoo.integrity, null)
 })

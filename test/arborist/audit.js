@@ -7,96 +7,35 @@ const fixtures = resolve(__dirname, '../fixtures')
 
 const fixture = (t, p) => require(fixtures + '/reify-cases/' + p)(t)
 
-const registryServer = require('../fixtures/registry-mocks/server.js')
-const {registry, auditResponse} = registryServer
+const {
+  start,
+  stop,
+  registry,
+  auditResponse,
+  advisoryBulkResponse,
+} = require('../fixtures/registry-mocks/server.js')
 const cache = t.testdir()
 
-// two little helper functions to make the loaded trees
-// easier to look at in the snapshot results.
-const printEdge = (edge, inout) => ({
-  name: edge.name,
-  type: edge.type,
-  spec: edge.spec,
-  ...(inout === 'in' ? {
-    from: edge.from && edge.from.location,
-  } : {
-    to: !edge.to || edge.to.name === 'fsevents' ? null
-      : edge.to.location,
-  }),
-  ...(edge.error ? { error: edge.error } : {}),
-  __proto__: { constructor: edge.constructor },
-})
+t.before(start)
+t.teardown(stop)
 
-const printTree = tree => ({
-  name: tree.name,
-  location: tree.location,
-  resolved: tree.resolved,
-  // 'package': tree.package,
-  ...(tree.extraneous ? { extraneous: true } : {
-    ...(tree.dev ? { dev: true } : {}),
-    ...(tree.optional ? { optional: true } : {}),
-    ...(tree.devOptional && !tree.dev && !tree.optional
-      ? { devOptional: true } : {}),
-    ...(tree.peer ? { peer: true } : {}),
-  }),
-  ...(tree.inBundle ? { bundled: true } : {}),
-  ...(tree.error
-    ? {
-      error: {
-        code: tree.error.code,
-        ...(tree.error.path ? { path: relative(__dirname, tree.error.path) }
-          : {}),
-      }
-    } : {}),
-  ...(tree.isLink ? {
-    target: {
-      name: tree.target.name,
-      parent: tree.target.parent && tree.target.parent.location
-    }
-  } : {}),
-  ...(tree.inBundle ? { bundled: true } : {}),
-  ...(tree.edgesIn.size ? {
-    edgesIn: new Set([...tree.edgesIn]
-      .sort((a, b) => a.from.location.localeCompare(b.from.location))
-      .map(edge => printEdge(edge, 'in'))),
-  } : {}),
-  ...(tree.edgesOut.size ? {
-    edgesOut: new Map([...tree.edgesOut.entries()]
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([name, edge]) => [name, printEdge(edge, 'out')]))
-  } : {}),
-  ...( !tree.fsChildren.size ? {} : {
-    fsChildren: new Set([...tree.fsChildren]
-      .sort((a, b) => a.path.localeCompare(b.path))
-      .map(tree => printTree(tree))),
-  }),
-  ...( tree.target || !tree.children.size ? {}
-    : {
-      children: new Map([...tree.children.entries()]
-        // this one is specific to darwin, filter it out so CI doesn't fail
-        .filter(([name, node]) => name !== 'fsevents')
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([name, tree]) => [name, printTree(tree)]))
-    }),
-  __proto__: { constructor: tree.constructor },
-})
+const {
+  normalizePath,
+  printTree,
+} = require('../utils.js')
 
-const { format } = require('tcompare')
+const newArb = (path, options = {}) =>
+  new Arborist({ path, cache, registry, ...options })
 
-const cwd = process.cwd()
+const cwd = normalizePath(process.cwd())
 t.cleanSnapshot = s => s.split(cwd).join('{CWD}')
-
-t.test('setup server', { bail: true, buffered: false }, registryServer)
+  .split(registry).join('https://registry.npmjs.org/')
 
 t.test('audit finds the bad deps', async t => {
   const path = resolve(fixtures, 'deprecated-dep')
   t.teardown(auditResponse(resolve(fixtures, 'audit-nyc-mkdirp/audit.json')))
 
-  const arb = new Arborist({
-    cache,
-    path,
-    registry,
-  })
+  const arb = newArb(path)
 
   const report = await arb.audit()
   t.equal(report.topVulns.size, 0)
@@ -106,17 +45,65 @@ t.test('audit finds the bad deps', async t => {
 t.test('audit fix reifies out the bad deps', async t => {
   const path = fixture(t, 'deprecated-dep')
   t.teardown(auditResponse(resolve(fixtures, 'audit-nyc-mkdirp/audit.json')))
-  const arb = new Arborist({
-    cache,
-    path,
-    registry,
-  })
+  const arb = newArb(path)
   const tree = printTree(await arb.audit({fix: true}))
   t.matchSnapshot(tree, 'reified out the bad mkdirp and minimist')
 })
 
 t.test('audit does not do globals', t =>
-  t.rejects(new Arborist({ cache, path: '.', global: true }).audit(), {
+  t.rejects(newArb('.', { global: true }).audit(), {
     message: '`npm audit` does not support testing globals',
     code: 'EAUDITGLOBAL',
   }))
+
+t.test('audit in a workspace', async t => {
+  const src = resolve(fixtures, 'audit-nyc-mkdirp')
+  const auditFile = resolve(src, 'advisory-bulk.json')
+  t.teardown(advisoryBulkResponse(auditFile))
+
+  const path = t.testdir({
+    'package.json': JSON.stringify({
+      workspaces: ['packages/*'],
+      dependencies: {
+        mkdirp: '1',
+      },
+    }),
+    packages: {
+      a: {
+        'package.json': JSON.stringify({
+          name: 'a',
+          version: '1.2.3',
+          dependencies: {
+            mkdirp: '0',
+          },
+        }),
+      },
+      b: {
+        'package.json': JSON.stringify({
+          name: 'b',
+          version: '1.2.3',
+          dependencies: {
+            mkdirp: '0',
+          },
+        }),
+      },
+    },
+  })
+
+  // reify it without auditing so that we can put the "bad" versions
+  // in place and save a lockfile reflecting this.
+  await newArb(path, { audit: false }).reify()
+  const bad = 'mkdirp@0.5.0'
+  await newArb(path, { audit: false, workspaces: ['a'] }).reify({ add: [bad] })
+  await newArb(path, { audit: false, workspaces: ['b'] }).reify({ add: [bad] })
+
+  const auditReport = await newArb(path, { workspaces: ['a'] }).audit()
+  t.equal(auditReport.get('mkdirp').nodes.size, 1)
+  t.strictSame(auditReport.toJSON().vulnerabilities.mkdirp.nodes, ['packages/a/node_modules/mkdirp'])
+  t.equal(auditReport.get('minimist').nodes.size, 1)
+  t.strictSame(auditReport.toJSON().vulnerabilities.minimist.nodes, ['node_modules/minimist'])
+
+  const fixed = await newArb(path, { workspaces: ['b'] }).audit({ fix: true })
+  t.equal(fixed.children.get('a').target.children.get('mkdirp').version, '0.5.0', 'did not fix a')
+  t.equal(fixed.children.get('b').target.children.get('mkdirp').version, '0.5.5', 'did fix b')
+})

@@ -2,107 +2,46 @@ const t = require('tap')
 const { format } = require('tcompare')
 const Arborist = require('../../lib/arborist')
 
-const { resolve, relative } = require('path')
-const { realpathSync } = require('fs')
+const { resolve } = require('path')
 const Node = require('../../lib/node.js')
 const Shrinkwrap = require('../../lib/shrinkwrap.js')
+const fs = require('fs')
 
 const {
   fixtures,
   roots,
-  symlinks,
 } = require('../fixtures/index.js')
 
-// little helper functions to make the loaded trees
-// easier to look at in the snapshot results.
-const pp = path => path && normalizePath(path.substr(fixtures.length + 1))
-const normalizePath = path => path.replace(/[A-Z]:/, '').replace(/\\/g, '/')
+// strip the fixtures path off of the trees in snapshots
+const pp = path => path &&
+  normalizePath(path).substr(normalizePath(fixtures).length + 1)
+const defixture = obj => {
+  if (obj instanceof Set)
+    return new Set([...obj].map(defixture))
 
-const printEdge = (edge, inout) => ({
-  name: edge.name,
-  type: edge.type,
-  spec: normalizePath(edge.spec),
-  ...(inout === 'in' ? {
-    from: edge.from && pp(edge.from.realpath),
-  } : {
-    to: edge.to && pp(edge.to.realpath),
-  }),
-  ...(edge.from && edge.from.dummy ? { FROM_DUMMY: true } : {}),
-  ...(edge.to && edge.to.dummy ? { TO_DUMMY: true } : {}),
-  ...(edge.error ? { error: edge.error } : {}),
-  __proto__: { constructor: edge.constructor },
-})
+  if (obj instanceof Map)
+    return new Map([...obj].map(([name, val]) => [name, defixture(val)]))
 
-const stringify = require('json-stringify-nice')
-const printTree = tree => ({
-  name: tree.name,
-  location: tree.location,
-  realpath: pp(tree.realpath),
-  top: pp(tree.top.realpath),
-  ...(tree.extraneous ? { extraneous: true } : {
-    ...(tree.dev ? { dev: true } : {}),
-    ...(tree.optional ? { optional: true } : {}),
-    ...(tree.devOptional && !tree.dev && !tree.optional
-      ? { devOptional: true } : {}),
-    ...(tree.peer ? { peer: true } : {}),
-  }),
-  ...(tree.fsParent ? { fsParent: pp(tree.fsParent.path) } : {}),
-  ...(tree.errors.length
-    ? {
-      errors: tree.errors.map(error => ({
-        code: error.code,
-        ...(error.code ? {} : {
-          code: 'no code, wtf???',
-          message: error.message,
-          stack: ('' + error.stack).split('\n'),
-        }),
-        ...(error.path ? { path: normalizePath(relative(__dirname, error.path)) }
-          : {}),
-      })),
-    } : {}),
-  ...(tree.isLink ? {
-    target: tree.target && {
-      name: tree.target.name,
-      ...(tree.target.parent ? { parent: pp(tree.target.parent.realpath) } : {}),
-      ...(tree.target.fsParent ? { fsParent: pp(tree.target.fsParent.realpath) } : {}),
-    }
-  } : {}),
-  ...(tree.inBundle ? { bundled: true } : {}),
-  ...(tree.edgesIn.size ? {
-    edgesIn: new Set([...tree.edgesIn]
-      .sort((a, b) => pp(a.from.realpath).localeCompare(pp(b.from.realpath)))
-      .map(edge => printEdge(edge, 'in'))),
-  } : {}),
-  ...(tree.edgesOut.size ? {
-    edgesOut: new Map([...tree.edgesOut.entries()]
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([name, edge]) => [name, printEdge(edge, 'out')]))
-  } : {}),
-  ...( tree.target || !tree.children.size ? {}
-    : {
-      children: new Map([...tree.children.entries()]
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([name, tree]) => [name, printTree(tree)]))
-    }),
-  ...(tree.target || !tree.fsChildren.size ? {}
-    : {
-      fsChildren: [...tree.fsChildren]
-        .sort((a, b) => a.path.localeCompare(b.path))
-        .map(tree => tree.location)
-    }),
-  __proto__: { constructor: tree.constructor },
-  ...( !tree.meta ? {} : {
-    // stringify and re-parse to sort consistently
-    meta: JSON.parse(stringify(tree.meta.commit())),
-  })
-})
+  for (const key in obj) {
+    if (['path', 'realpath'].includes(key))
+      obj[key] = pp(obj[key])
+    else if (typeof obj[key] === 'object' && obj[key] !== null)
+      obj[key] = defixture(obj[key])
+  }
+  return obj
+}
+
+const {
+  normalizePath,
+  printTree,
+} = require('../utils.js')
 
 const cwd = normalizePath(process.cwd())
 t.cleanSnapshot = s => s.split(cwd).join('{CWD}')
 
-t.formatSnapshot = tree => format(printTree(tree), { sort: true })
+t.formatSnapshot = tree => format(defixture(printTree(tree)), { sort: true })
 
-const loadActual = (path, opts) => new Arborist({path}).loadActual(opts)
+const loadActual = (path, opts) => new Arborist({path, ...opts}).loadActual(opts)
 
 roots.forEach(path => {
   const dir = resolve(fixtures, path)
@@ -167,15 +106,15 @@ t.test('load a tree rooted on a different node', async t => {
   t.equal(transp.children.get('a').path, resolve(other, 'node_modules/a'))
   t.equal(transp.children.get('b').path, resolve(other, 'node_modules/b'))
   t.equal(transp.children.get('c').path, resolve(other, 'node_modules/c'))
-  t.notEqual(transp.children.get('a').target, null, 'did not break link')
-  t.notEqual(transp.children.get('b').target, null, 'did not break link')
-  t.notEqual(transp.children.get('c').target, null, 'did not break link')
+  t.not(transp.children.get('a').target, null, 'did not break link')
+  t.not(transp.children.get('b').target, null, 'did not break link')
+  t.not(transp.children.get('c').target, null, 'did not break link')
   t.equal(transp.children.get('a').realpath, resolve(other, 'packages/a'))
   t.equal(transp.children.get('b').realpath, resolve(other, 'packages/b'))
   t.equal(transp.children.get('c').realpath, resolve(other, 'packages/c'))
 
   // should look the same, once we strip off the other/fixture paths
-  t.equal(format(printTree(actual)), format(printTree(transp)), 'similar trees')
+  t.equal(format(defixture(printTree(actual))), format(defixture(printTree(transp))), 'similar trees')
 
   // now try with a transplant filter that keeps out the 'a' module
   const rootFiltered = new Node({
@@ -191,7 +130,7 @@ t.test('load a tree rooted on a different node', async t => {
   rootFiltered.peer = false
   const transpFilter = await new Arborist({path}).loadActual({
     root: rootFiltered,
-    transplantFilter: n => n.name !== 'a'
+    transplantFilter: n => n.name !== 'a',
   })
   t.equal(transpFilter.children.get('a'), undefined)
   t.equal(transpFilter.children.get('b').path, resolve(other, 'node_modules/b'))
@@ -243,12 +182,12 @@ t.test('missing json does not obscure deeper errors', t =>
 
 t.test('missing folder', t =>
   t.rejects(loadActual(resolve(fixtures, 'does-not-exist')), {
-    code: 'ENOENT'
+    code: 'ENOENT',
   }))
 
 t.test('missing symlinks', t =>
   loadActual(resolve(fixtures, 'badlink')).then(d => {
-    t.is(d.children.size, 2, 'both broken children are included')
+    t.equal(d.children.size, 2, 'both broken children are included')
     t.match(d.children.get('foo'), { errors: [{ code: 'ELOOP' }] },
       'foo has error')
     t.match(d.children.get('bar'), { errors: [{ code: 'ENOENT' }] },
@@ -269,7 +208,7 @@ t.test('load a global space symlink', t =>
 t.test('load a global space with a filter', t =>
   t.resolveMatchSnapshot(loadActual(resolve(fixtures, 'global-style/lib'), {
     global: true,
-    filter: (parent, kid) => parent.parent || kid === 'semver'
+    filter: (parent, kid) => parent.parent || kid === 'semver',
   })))
 
 t.test('workspaces', t => {
@@ -279,4 +218,175 @@ t.test('workspaces', t => {
     ))
 
   t.end()
+})
+
+t.test('load workspace targets, even if links not present', async t => {
+  const path = t.testdir({
+    'package.json': JSON.stringify({
+      workspaces: ['packages/*'],
+      dependencies: {
+        wrappy: '1.0.0',
+      },
+    }),
+    packages: {
+      a: {
+        'package.json': JSON.stringify({
+          name: 'a',
+          version: '1.2.3',
+        }),
+      },
+      b: {
+        'package.json': JSON.stringify({
+          name: 'b',
+          version: '1.2.3',
+        }),
+      },
+      c: {
+        'package.json': JSON.stringify({
+          name: 'c',
+          version: '1.2.3',
+        }),
+      },
+    },
+  })
+  t.matchSnapshot(await loadActual(path))
+})
+
+t.test('transplant workspace targets, even if links not present', async t => {
+  const path = t.testdir({
+    'package.json': JSON.stringify({
+      workspaces: ['packages/*'],
+      dependencies: {
+        wrappy: '1.0.0',
+      },
+    }),
+    packages: {
+      a: {
+        'package.json': JSON.stringify({
+          name: 'a',
+          version: '1.2.3',
+        }),
+      },
+      b: {
+        'package.json': JSON.stringify({
+          name: 'b',
+          version: '1.2.3',
+        }),
+      },
+      c: {
+        'package.json': JSON.stringify({
+          name: 'c',
+          version: '1.2.3',
+        }),
+      },
+    },
+  })
+  const root = new Node({
+    path,
+    pkg: {
+      workspaces: ['packages/*'],
+      dependencies: {
+        wrappy: '1.0.0',
+      },
+    },
+  })
+  t.matchSnapshot(await loadActual(path, { root }), 'transplant everything')
+  t.matchSnapshot(await loadActual(path, {
+    root,
+    transplantFilter: node => node.name !== 'a',
+  }), 'do not transplant node named "a"')
+})
+
+t.test('load workspaces when loading from hidding lockfile', async t => {
+  const path = t.testdir({
+    'package.json': JSON.stringify({
+      workspaces: ['packages/*'],
+    }),
+    node_modules: {
+      a: t.fixture('symlink', '../packages/a'),
+      b: t.fixture('symlink', '../packages/b'),
+      '.package-lock.json': JSON.stringify({
+        name: 'workspace-abc',
+        lockfileVersion: 2,
+        requires: true,
+        packages: {
+          'node_modules/a': {
+            resolved: 'packages/a',
+            link: true,
+          },
+          'node_modules/b': {
+            resolved: 'packages/b',
+            link: true,
+          },
+          'packages/a': {
+            version: '1.0.0',
+          },
+          'packages/b': {
+            version: '1.2.3',
+          },
+        },
+      }),
+    },
+    packages: {
+      a: {
+        'package.json': JSON.stringify({
+          name: 'a',
+          // note: version changed since reifying
+          version: '1.2.3',
+        }),
+      },
+      b: {
+        'package.json': JSON.stringify({
+          name: 'b',
+          version: '1.2.3',
+        }),
+      },
+    },
+  })
+  const hidden = resolve(path, 'node_modules/.package-lock.json')
+  const then = Date.now() + 10000
+  fs.utimesSync(hidden, new Date(then), new Date(then))
+  const tree = await loadActual(path)
+  const aLink = tree.children.get('a')
+  const bLink = tree.children.get('b')
+  t.notOk(aLink.extraneous, 'a link not be extraneous')
+  t.notOk(bLink.extraneous, 'b link not be extraneous')
+  const aTarget = aLink.target
+  const bTarget = bLink.target
+  t.notOk(aTarget.extraneous, 'a target not be extraneous')
+  t.notOk(bTarget.extraneous, 'b target not be extraneous')
+  t.equal(aTarget.version, '1.2.3', 'updated a target version')
+  t.matchSnapshot(tree, 'actual tree')
+})
+
+t.test('recalc dep flags for virtual load actual', async t => {
+  const path = t.testdir({
+    node_modules: {
+      abbrev: {
+        'package.json': JSON.stringify({
+          name: 'abbrev',
+          version: '1.1.1',
+        }),
+      },
+      '.package-lock.json': JSON.stringify({
+        lockfileVersion: 2,
+        requires: true,
+        packages: {
+          'node_modules/abbrev': {
+            version: '1.1.1',
+            resolved: 'https://registry.npmjs.org/abbrev/-/abbrev-1.1.1.tgz',
+            integrity: 'sha512-nne9/IiQ/hzIhY6pdDnbBtz7DjPTKrY00P/zvPSm5pOFkl6xuGrGnXn/VtTNNfNtAfZ9/1RtehkszU9qcTii0Q==',
+          },
+        },
+      }),
+    },
+    'package.json': JSON.stringify({}),
+  })
+
+  const hidden = resolve(path, 'node_modules/.package-lock.json')
+  const then = Date.now() + 10000
+  fs.utimesSync(hidden, new Date(then), new Date(then))
+  const tree = await loadActual(path)
+  const abbrev = tree.children.get('abbrev')
+  t.equal(abbrev.extraneous, true, 'abbrev is extraneous')
 })
